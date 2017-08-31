@@ -17,7 +17,7 @@ typedef struct work_item {
 
 int     worklist_init(size_t size);
 void    worklist_destroy(void);
-void    worklist_terminate(void);
+void    worklist_stop(void);
 int     worklist_status(void);
 void    worklist_append(work_item item);
 work_item worklist_poll(void);

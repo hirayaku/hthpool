@@ -1,3 +1,13 @@
+/* NOTE:
+ * In my machine using gcc, pthread barrier is not available when -std=c99
+ * is used, -std=gnu99/_GNU_SOURCE macro will hopefully enable it, but causes
+ * portability problems.
+ * Using clang won't cause such problems. But in macOS, the problem exists.
+ * The reason is, pthread_barrier is an optional extension to POSIX standard.
+ */
+#if defined(__GNUC__)
+#define _GNU_SOURCE
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -11,7 +21,7 @@ static pthread_t *pool;
 static pthread_mutex_t mutex_term_count;
 static pthread_cond_t  cond_term, cond_continue;
 static pthread_barrier_t barrier_continue;
-static int _hthp_terminated_threads = 0;
+static int _hthp_stopped_threads = 0;
 static int _hthp_to_destroy = 0;
 static int _hthp_exited_threads = 0;
 
@@ -21,29 +31,28 @@ static int _hthp_exited_threads = 0;
  * Always return NULL
  */
 static void* daemon_run(void* arg) {
-    int terminated = 0;
     for(;;) {
         /* request task from task queue and execute */
         for(;;) {
             if (worklist_status() != 0) {
                 pthread_mutex_lock (&mutex_term_count);
-                _hthp_terminated_threads++;
+                _hthp_stopped_threads++;
                 pthread_mutex_unlock (&mutex_term_count);
-                if (terminated == _hthp_thread_num)
+                if (_hthp_stopped_threads == _hthp_thread_num)
                     pthread_cond_broadcast (&cond_term);
                 break;
             }
             work_item item = worklist_poll();
             item.run(item.arg);
         }
-        /* After the thread detects `terminate` flag,
+        /* After the thread detects `stop` flag,
          * it will stuck here until issued a `continue` cond
          */
         pthread_mutex_lock (&mutex_term_count);
         pthread_cond_wait (&cond_continue, &mutex_term_count);
-        _hthp_terminated_threads--;
+        _hthp_stopped_threads--;
 #ifdef HTHPOOL_DEBUG
-        printf ("%d threads remain blocked\n", _hthp_terminated_threads);
+        printf ("%d threads remain blocked\n", _hthp_stopped_threads);
 #endif
         pthread_mutex_unlock (&mutex_term_count);
         pthread_barrier_wait (&barrier_continue);
@@ -68,11 +77,11 @@ int hthpool_init(int num) {
         return -1;
 
     _hthp_thread_num = num;
-    _hthp_terminated_threads = 0;
-    if (pthread_mutex_init (&mutex_term_count)  ||
-        pthread_cond_init (&cond_term)          ||
-        pthread_cond_init (&cond_continue)      ||
-        pthread_barrier_init (&barrier_continue)
+    _hthp_stopped_threads = 0;
+    if (pthread_mutex_init (&mutex_term_count, NULL)  ||
+        pthread_cond_init (&cond_term, NULL)          ||
+        pthread_cond_init (&cond_continue, NULL)      ||
+        pthread_barrier_init (&barrier_continue, NULL, _hthp_thread_num)
        )
     {
         perror ("Initialize synchronization variables");
@@ -81,8 +90,9 @@ int hthpool_init(int num) {
 
     wlret = worklist_init (_hthp_WL_SIZE);
     mret = ( NULL ==
-             (pool = (pthread_t*) malloc (sizeof(pthread_t) * thread_num)) );
-    for (i = 0; i < thread_num; i++) {
+             (pool = (pthread_t*) malloc (sizeof(pthread_t) * _hthp_thread_num))
+           );
+    for (i = 0; i < _hthp_thread_num; i++) {
         pret = pthread_create(pool + i, NULL,
                               daemon_run, NULL);
         if (pret) {
@@ -106,7 +116,6 @@ int hthpool_init(int num) {
  *  -2      cannot join threads
  */
 void hthpool_destroy(void) {
-    int  pret = 0;
     worklist_destroy ();
 
     if (pthread_mutex_destroy (&mutex_term_count)   ||
@@ -120,12 +129,12 @@ void hthpool_destroy(void) {
     }
 }
 
-/* Wait until all threads are terminated */
+/* Wait until all threads are stopped */
 void hthpool_wait(void) {
     pthread_mutex_lock (&mutex_term_count);
     pthread_cond_wait (&cond_continue, &mutex_term_count);
 #ifdef HTHPOOL_DEBUG
-    puts ("All threads terminated");
+    puts ("All threads stopped");
 #endif
     pthread_mutex_unlock (&mutex_term_count);
 }
@@ -138,6 +147,6 @@ void hthpool_submit(work_item item) {
     worklist_append(item);
 }
 
-void hthpool_terminate(void) {
-    worklist_terminate();
+void hthpool_stop(void) {
+    worklist_stop();
 }
