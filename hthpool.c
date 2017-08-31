@@ -19,10 +19,11 @@
 static int thread_num;
 static int _hthp_WL_SIZE = 4096;
 static pthread_t *pool;
-static pthread_mutex_t      mutex_term_count;
+static pthread_mutex_t      mutex_term_count, mutex_destroy;
 static pthread_cond_t       cond_term, cond_continue;
 static pthread_barrier_t    barrier_continue;
 static int _hthp_stopped_threads = 0;
+static int _hthp_close = 0;
 
 /* This is the wrapper function for threads to acquire new item
  * from the work list, execute the task and then wait for new ones.
@@ -51,6 +52,11 @@ static void* daemon_run(void* arg) {
         printf ("%d threads remain blocked\n", _hthp_stopped_threads);
 #endif
         pthread_mutex_unlock (&mutex_term_count);
+        if (_hthp_close) {
+            if (_hthp_stopped_threads == 0)
+                pthread_mutex_unlock (&mutex_destroy);
+            break;
+        }
         /* Don't enter into inner loop until all threads are ready.
          * If no barrier here, chances are some threads enter the loop,
          * stop the threadpool and exit the loop while others haven't
@@ -79,7 +85,9 @@ int hthpool_init(int num) {
 
     thread_num = num;
     _hthp_stopped_threads = 0;
+    _hthp_close = 0;
     if (pthread_mutex_init (&mutex_term_count, NULL)  ||
+        pthread_mutex_init (&mutex_destroy, NULL)  ||
         pthread_cond_init (&cond_term, NULL)          ||
         pthread_cond_init (&cond_continue, NULL)      ||
         pthread_barrier_init (&barrier_continue, NULL, thread_num)
@@ -120,8 +128,18 @@ void hthpool_destroy(void) {
     int i, pret;
     void* ret;
     worklist_destroy ();
-
+    
+    _hthp_close = 1;
+    pthread_cond_broadcast (&cond_continue);
+    /* XXX: This is ugly, find another way out?
+     * Wait until all threads have exited so that no locked mutexes or
+     * waited cond's or sync'ing barrier will be destroyed
+     */
+    pthread_mutex_lock (&mutex_destroy);
+    pthread_mutex_lock (&mutex_destroy);
+    pthread_mutex_unlock (&mutex_destroy);
     if (pthread_mutex_destroy (&mutex_term_count)   ||
+        pthread_mutex_destroy (&mutex_destroy)      ||
         pthread_cond_destroy (&cond_term)           ||
         pthread_cond_destroy (&cond_continue)       ||
         pthread_barrier_destroy (&barrier_continue)

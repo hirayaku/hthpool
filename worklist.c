@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include "common.h"
+#define HTHPOOL_DEBUG
 #define DEFAULT_SIZE 65533
 #define DEFAULT_CONCURRENCY INT_MAX
 
@@ -47,7 +48,7 @@ static void* dry_run(void* arg) {
 }
 const work_item _hthp_empty_task = { (task) dry_run, NULL };
 
-static int work_item_comp(const work_item *item1, const work_item *item2) {
+static inline int work_item_comp(const work_item *item1, const work_item *item2) {
     return (item1->arg == item2->arg &&
             item1->run == item2->run);
 }
@@ -57,8 +58,8 @@ int worklist_init(size_t size, size_t max_concurrency) {
     if (size == 0)
         size = DEFAULT_SIZE;
     if (max_concurrency == 0) {
-        MAX_CONCURRENCY = max_concurrency;
-    } else MAX_CONCURRENCY = DEFAULT_CONCURRENCY;
+        MAX_CONCURRENCY = DEFAULT_CONCURRENCY;
+    } else MAX_CONCURRENCY = max_concurrency;
 
     pthread_mutex_init (&mutex_head, NULL);
     pthread_mutex_init (&mutex_tail, NULL);
@@ -88,9 +89,9 @@ void worklist_reset(void) {
     memset (worklist, 0, sizeof(work_item) * qsize);
 }
 
-/* destroy built-in worklist and associate sync variables
+/* destroy built-in worklist and associated sync variables
  * It is not safe to call this function if some threads are still blocked by
- * any mutexes and conds defined in this file.
+ * some mutexes and conds defined in this file.
  */
 void worklist_destroy(void) {
     pthread_mutex_destroy (&mutex_head);
@@ -107,6 +108,9 @@ void worklist_destroy(void) {
 void worklist_stop(void) {
     pthread_mutex_lock (&mutex_head);
     pthread_mutex_lock (&mutex_tail);
+#ifdef HTHPOOL_DEBUG
+    puts ("Stop worklist");
+#endif
     set_stop_flag();
     pthread_mutex_unlock (&mutex_head);
     pthread_mutex_unlock (&mutex_tail);
@@ -123,16 +127,13 @@ int worklist_append(work_item item) {
     assert (work_item_comp (&item, &_hthp_empty_task));
     /* If worklist is full, wait on cond_nonfull */
     pthread_mutex_lock (&mutex_tail);
-    if (status.stop) {
-        pthread_mutex_unlock (&mutex_tail);
-        return -1;
-    }
     appending++;
     while ((tail + 1) % qsize == head) {
+        if (status.stop) {
+            pthread_mutex_unlock (&mutex_tail);
+            return -1;
+        }
         if (appending == MAX_CONCURRENCY) {
-#ifdef HTHPOOL_DEBUG
-            puts ("All threads busy appending tasks");
-#endif
             appending--;
             pthread_mutex_unlock (&mutex_tail);
             pthread_cond_broadcast (&cond_ext_full);
@@ -154,16 +155,13 @@ work_item worklist_poll(void) {
     work_item item = _hthp_empty_task;
     /* If worklist is empty, wait on cond_nonempty */
     pthread_mutex_lock (&mutex_head);
-    if (status.stop) {
-        pthread_mutex_unlock (&mutex_head);
-        return item;
-    }
     polling++;
     while ((head + 1) % qsize == tail) {
+        if (status.stop) {
+            pthread_mutex_unlock (&mutex_head);
+            return item;
+        }
         if (polling == MAX_CONCURRENCY) {
-#ifdef HTHPOOL_DEBUG
-            puts ("All threads busy polling tasks");
-#endif
             polling--;
             pthread_mutex_unlock (&mutex_head);
             pthread_cond_broadcast (&cond_ext_empty);
@@ -187,8 +185,7 @@ work_item worklist_poll(void) {
 int worklist_busy(void) {
     int occupied;
     if (head < tail) {
-        occupied = tail - head - 1;
-    } else {
+        occupied = tail - head - 1; } else {
         occupied = tail + qsize -1;
     }
     return ( ((occupied / (double)(qsize - 2)) >= 0.9)?1:0 );
