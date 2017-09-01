@@ -10,11 +10,30 @@
 #endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <pthread.h>
 #include <sys/types.h>
 #include "common.h"
 #include "worklist.h"
 #define HTHPOOL_DEBUG
+
+#ifdef HTHPOOL_DEBUG
+typedef union {
+    pthread_t pthread_id;
+    unsigned long numeric;
+} _hthp_tid;
+/* Debug print function. Credit to
+ * @unwind in StackOverflow "How to wrap printf() into a function or macro?"
+ * This macro should be used with double parenthesis:
+ * DBG_PRINT(("This is the debug info!"))
+ */
+# define DBG_PRINT(x) printf x
+# define _HTHPOOL_TID(x) ( (x.numeric >> 12) & 0xfff )
+#else
+# define DBG_PRINT(x)
+# define _HTHPOOL_TID(x)
+#endif
+
 
 static int thread_num;
 static int _hthp_WL_SIZE = 4096;
@@ -23,14 +42,31 @@ static pthread_mutex_t      mutex_term_count, mutex_destroy;
 static pthread_cond_t       cond_term, cond_continue;
 static pthread_barrier_t    barrier_continue;
 static int _hthp_stopped_threads = 0;
+static int _hthp_blocked_threads = 0;
 static int _hthp_close = 0;
 
+static int init_locked_mutex(pthread_mutex_t* restrict mutex,
+                             pthread_mutexattr_t *restrict attr)
+{
+    int pret = pthread_mutex_init (mutex, attr);
+    if (pret)
+        return pret;
+    pret = pthread_mutex_lock (mutex);
+    return pret;
+}
+static int destroy_locked_mutex(pthread_mutex_t* restrict mutex) {
+    return pthread_mutex_destroy (mutex);
+}
 /* This is the wrapper function for threads to acquire new item
  * from the work list, execute the task and then wait for new ones.
  * This function is passed into pthread_create during thread pool initialization
  * Always return NULL
  */
 static void* daemon_run(void* arg) {
+#ifdef HTHPOOL_DEBUG
+    _hthp_tid tid;
+    tid.pthread_id = pthread_self ();
+#endif
     for(;;) {
         /* request task from task queue and execute */
         for(;;) {
@@ -39,24 +75,33 @@ static void* daemon_run(void* arg) {
             work_item item = worklist_poll();
             item.run(item.arg);
         }
-        /* After the thread detects `stop` flag,
-         * it will stuck at `cond_continue` until issued a `continue` cond
+        /* After the thread detects `stop` flag, it break out of the loop and
+         * will stuck at `cond_continue` until issued a `continue` cond
          */
         pthread_mutex_lock (&mutex_term_count);
         _hthp_stopped_threads++;
+        /* The following wakes up the main thread in `hthpool_wait`,
+         * but main thread won't be immediately active:
+         * it still acquires `mutex_term_count` which is locked now
+         */
         if (_hthp_stopped_threads == thread_num)
             pthread_cond_broadcast (&cond_term);
+        /* Unlock `mutex_term_count` and wait for `hthpool_continue` or
+         * `hthpool_destroy`.
+         */
         pthread_cond_wait (&cond_continue, &mutex_term_count);
-        _hthp_stopped_threads--;
-#ifdef HTHPOOL_DEBUG
-        printf ("%d threads remain blocked\n", _hthp_stopped_threads);
-#endif
+        /* thread count already reset/set by main thread */
+        _hthp_blocked_threads--;
+        DBG_PRINT (("%d threads remain blocked\n", _hthp_blocked_threads));
         pthread_mutex_unlock (&mutex_term_count);
         if (_hthp_close) {
-            if (_hthp_stopped_threads == 0)
+            if (_hthp_blocked_threads == 0) {
                 pthread_mutex_unlock (&mutex_destroy);
+            }
+            DBG_PRINT (("  Thread 0x%lx will be dead.\n", _HTHPOOL_TID (tid)));
             break;
         }
+        DBG_PRINT(("  Thread 0x%lx keeps alive.\n", _HTHPOOL_TID (tid)));
         /* Don't enter into inner loop until all threads are ready.
          * If no barrier here, chances are some threads enter the loop,
          * stop the threadpool and exit the loop while others haven't
@@ -87,7 +132,7 @@ int hthpool_init(int num) {
     _hthp_stopped_threads = 0;
     _hthp_close = 0;
     if (pthread_mutex_init (&mutex_term_count, NULL)  ||
-        pthread_mutex_init (&mutex_destroy, NULL)  ||
+        init_locked_mutex (&mutex_destroy, NULL)      ||
         pthread_cond_init (&cond_term, NULL)          ||
         pthread_cond_init (&cond_continue, NULL)      ||
         pthread_barrier_init (&barrier_continue, NULL, thread_num)
@@ -129,17 +174,13 @@ void hthpool_destroy(void) {
     void* ret;
     worklist_destroy ();
     
+    DBG_PRINT (("Kill'em all!\n"));
     _hthp_close = 1;
+    _hthp_blocked_threads = thread_num;
     pthread_cond_broadcast (&cond_continue);
-    /* XXX: This is ugly, find another way out?
-     * Wait until all threads have exited so that no locked mutexes or
-     * waited cond's or sync'ing barrier will be destroyed
-     */
     pthread_mutex_lock (&mutex_destroy);
-    pthread_mutex_lock (&mutex_destroy);
-    pthread_mutex_unlock (&mutex_destroy);
     if (pthread_mutex_destroy (&mutex_term_count)   ||
-        pthread_mutex_destroy (&mutex_destroy)      ||
+        destroy_locked_mutex (&mutex_destroy)       ||
         pthread_cond_destroy (&cond_term)           ||
         pthread_cond_destroy (&cond_continue)       ||
         pthread_barrier_destroy (&barrier_continue)
@@ -162,22 +203,21 @@ void hthpool_wait(void) {
     pthread_mutex_lock (&mutex_term_count);
     /* If all threads in the threadpool already stopped, no need to wait */
     if (_hthp_stopped_threads == thread_num) {
-#ifdef HTHPOOL_DEBUG
-    puts ("All threads stopped");
-#endif
+        DBG_PRINT (("All threads stopped\n"));
         pthread_mutex_unlock (&mutex_term_count);
         return;
     }
     pthread_cond_wait (&cond_term, &mutex_term_count);
-#ifdef HTHPOOL_DEBUG
-    puts ("All threads stopped");
-#endif
+    DBG_PRINT (("All threads stopped\n"));
     pthread_mutex_unlock (&mutex_term_count);
 }
 
 /* Make threadpool running again only after it's been stopped */
 void hthpool_continue(void) {
     worklist_reset ();
+    _hthp_stopped_threads = 0;
+    _hthp_blocked_threads = thread_num;
+    DBG_PRINT (("Threads, continue working!\n"));
     pthread_cond_broadcast (&cond_continue);
 }
 
@@ -190,5 +230,8 @@ int hthpool_submit(work_item item) {
 }
 
 void hthpool_stop(void) {
-    worklist_stop();
+    DBG_PRINT (("Threads, stop working!\n"));
+    work_item item = { (task) worklist_stop, NULL };
+    hthpool_submit (item);
+    /* worklist_stop(); */
 }

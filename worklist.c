@@ -18,7 +18,6 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include "common.h"
-#define HTHPOOL_DEBUG
 #define DEFAULT_SIZE 65533
 #define DEFAULT_CONCURRENCY INT_MAX
 
@@ -49,7 +48,7 @@ static void* dry_run(void* arg) {
 const work_item _hthp_empty_task = { (task) dry_run, NULL };
 
 static inline int work_item_comp(const work_item *item1, const work_item *item2) {
-    return (item1->arg == item2->arg &&
+    return !(item1->arg == item2->arg &&
             item1->run == item2->run);
 }
 
@@ -108,9 +107,6 @@ void worklist_destroy(void) {
 void worklist_stop(void) {
     pthread_mutex_lock (&mutex_head);
     pthread_mutex_lock (&mutex_tail);
-#ifdef HTHPOOL_DEBUG
-    puts ("Stop worklist");
-#endif
     set_stop_flag();
     pthread_mutex_unlock (&mutex_head);
     pthread_mutex_unlock (&mutex_tail);

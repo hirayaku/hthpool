@@ -1,5 +1,5 @@
-#ifndef TYPES_H_
-#define TYPES_H_
+#ifndef COMMON_H_
+#define COMMON_H_
 
 #ifdef __cplusplus
 extern "C" {

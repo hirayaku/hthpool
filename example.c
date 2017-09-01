@@ -16,7 +16,17 @@ int main(void) {
         pthread_cond_wait (&cond_ext_empty, &mutex_null);
         puts ("Thread pool is always empty");
         pthread_mutex_unlock (&mutex_null);
-        sleep (1);
+    }
+    hthpool_stop ();
+    hthpool_wait ();
+
+    hthpool_continue ();
+    rounds = 2;
+    while (rounds >= 0) {
+        rounds--;
+        pthread_cond_wait (&cond_ext_empty, &mutex_null);
+        puts ("Thread pool is always empty");
+        pthread_mutex_unlock (&mutex_null);
     }
     hthpool_stop ();
     hthpool_wait ();
