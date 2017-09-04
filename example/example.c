@@ -10,7 +10,7 @@ pthread_cond_t count_stop = PTHREAD_COND_INITIALIZER;
 int count = 0;
 void* print_empty(void* arg) {
     printf ("Worklist is empty!\n");
-    hthpool_hard_stop ();
+    hthpool_hard_stop (*(hthpool*)arg);
     return NULL;
 }
 void* print_info(void* arg) {
@@ -19,15 +19,10 @@ void* print_info(void* arg) {
 }
 
 int main(void) {
-    work_item t1 = { (task) print_info, NULL };
-    hthpool_register ((task)print_empty, NULL);
-    hthpool_init (4);
-    hthpool_wait ();
-
-    hthpool_register ((task)hthpool_hard_stop, (task)hthpool_hard_stop);
-    hthpool_continue ();
-
-    hthpool_wait ();
-    hthpool_destroy ();
+    hthpool pool;
+    work_item empty_event = { (task) print_empty, &pool };
+    pool = hthpool_init (4, empty_event, _wl_empty_item);
+    hthpool_wait (pool);
+    hthpool_destroy (pool);
     return 0;
 }

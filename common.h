@@ -15,6 +15,7 @@ struct work_item {
     task run;
     void* arg;
 };
+
 typedef struct work_item work_item;
 
 #ifdef __cplusplus
