@@ -17,13 +17,6 @@ struct work_item {
 };
 typedef struct work_item work_item;
 
-struct worklist_status {
-    int stop;
-    int empty;
-    int full; 
-};
-typedef struct worklist_status status_t;
-
 #ifdef __cplusplus
 }
 #endif

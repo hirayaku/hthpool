@@ -1,34 +1,22 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/types.h>
 #include "hthpool.h"
 
-int main(void) {
-    int rounds = 4;
-    pthread_mutex_t mutex_null = PTHREAD_MUTEX_INITIALIZER;
-    hthpool_init (4);
-    pthread_mutex_lock (&mutex_null);
-    while (rounds >= 0) {
-        rounds--;
-        pthread_cond_wait (&cond_ext_empty, &mutex_null);
-        puts ("Thread pool is always empty");
-        pthread_mutex_unlock (&mutex_null);
-    }
-    hthpool_stop ();
-    hthpool_wait ();
+pthread_mutex_t count_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t count_stop = PTHREAD_COND_INITIALIZER;
+int count = 0;
+void* print_empty(void* arg) {
+    printf ("Worklist is empty!\n");
+    hthpool_hard_stop ();
+    return NULL;
+}
 
-    hthpool_continue ();
-    rounds = 2;
-    while (rounds >= 0) {
-        rounds--;
-        pthread_cond_wait (&cond_ext_empty, &mutex_null);
-        puts ("Thread pool is always empty");
-        pthread_mutex_unlock (&mutex_null);
-    }
-    hthpool_stop ();
+int main(void) {
+    hthpool_register ((task)print_empty, NULL);
+    hthpool_init (4);
     hthpool_wait ();
     hthpool_destroy ();
     return 0;
