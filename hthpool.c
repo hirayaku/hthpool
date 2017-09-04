@@ -11,11 +11,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 #include <pthread.h>
 #include <sys/types.h>
 #include "common.h"
-#define HTHPOOL_DEBUG
+#undef HTHPOOL_DEBUG
 
 #ifdef HTHPOOL_DEBUG
 typedef union {
@@ -162,8 +161,6 @@ static void worklist_stop(void) {
 /* Blocking add work */
 static int worklist_add(work_item item) {
     int registered = 0;
-    /* Do not accept empty task */
-    assert (work_item_comp (&item, &_wl_empty_item));
     /* If worklist is full, wait on cond_nonfull */
     pthread_mutex_lock (&mutex_tail);
     while ((tail + 1) % qsize == head) {
@@ -271,7 +268,6 @@ static void* daemon_run(void* arg) {
             DBG_PRINT (("  Thread 0x%lx keeps alive.\n", _HTHPOOL_TID (tid)));
             pthread_barrier_wait (&barrier_continue);
         }
-        DBG_PRINT (("  Thread 0x%lx taking item.\n", _HTHPOOL_TID (tid)));
         work_item item = worklist_take();
         item.run(item.arg);
     }
