@@ -5,6 +5,11 @@
 extern "C" {
 #endif
 
+#define STAT_OK 0
+#define STAT_SYNC -1
+#define STAT_ALLOC -2
+#define STAT_TERM -3
+
 /* NOTE: In both ANSI-C and C99, it's undefined behavior to include
  * a function type in an aggregate type. 
  * GNU C extensions seem to support this. But `struct work_item` isn't portable.
